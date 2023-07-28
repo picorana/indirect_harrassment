@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html>
+<meta charset="UTF-8">
+    <head>
+        <!-- include d3 -->
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="js/stopwords.js"></script>
+
+        <style>
+            body {
+                font-family: sans-serif;
+                color: gray;
+                font-size: small;
+                display: inline-flex;
+            }
+        </style>
+    </head>
+    <body>
+    </body>
+    <script>
+
+        // authors
+        // Cernovich, elonmusk
+        let svgwidth = 500;
+        let svgheight = 300;
+        let original_data;
+
+        let dev_mode = true;
+
+        function find_stats(data, verbose=true){
+            // number of tweets
+            if (verbose) console.log("number of tweets:", data.length);
+
+            // number of thread ids
+            const numThreads = new Set(data.map(d => d.thread_id))
+            if (verbose) console.log("number of thread ids:", numThreads.size);
+
+            // number of different ids
+            const numIds = new Set(data.map(d => d.id))
+            if (verbose) console.log("number of ids:", numIds.size);
+
+            // number of author ids
+            const numAuthors = new Set(data.map(d => d.author_id))
+            if (verbose) console.log("number of authors:", numAuthors.size);
+
+            // number of retweeted users
+            const numRetweeted = new Set(data.filter(d => d.retweeted_user != "").map(d => d.retweeted_user))
+            if (verbose) console.log("number of retweeted users:", numRetweeted.size);
+
+            // number of quoted users
+            const numQuoted = new Set(data.filter(d => d.quoted_user != "").map(d => d.quoted_user))
+            if (verbose) console.log("number of quoted users:", numQuoted.size);
+
+            // number of replied users
+            const numReplied = new Set(data.filter(d => d.replied_user != "").map(d => d.replied_user))
+            if (verbose) console.log("number of replied users:", numReplied.size);
+
+            // number of rhetorics
+            const numRhetorics = new Set(data.filter(d => d.rhetoric != "").map(d => d.rhetoric))
+            if (verbose) console.log("number of rhetorics:", numRhetorics.size);
+
+            // total users retweeted, quoted, replied
+            const totalUsers = new Set([...numRetweeted, ...numQuoted, ...numReplied])
+            if (verbose) console.log("total users retweeted, quoted, replied:", totalUsers.size, totalUsers);
+        
+            return {
+                numThreads: numThreads.size,
+                numIds: numIds.size,
+                numAuthors: numAuthors.size,
+                numRetweeted: numRetweeted.size,
+                numQuoted: numQuoted.size,
+                numReplied: numReplied.size,
+                numRhetorics: numRhetorics.size,
+                totalUsers: totalUsers
+            }
+        }
+
+        function make_barchart(impressions_count, div, title){
+            let padding = {bottom: 50, left: 30, right: 20, top: 5}
+            let barchart_height = 150;
+            let barchart_width = svgwidth;
+
+            div.append("div")
+                .html("<b>" + title + ":</b> ")
+
+            // draw barchart with distribution of impressions
+            let impressions_svg = div.append("svg")
+                .attr("width", svgwidth)
+                .attr("height", barchart_height)
+                .style("border", "1px solid gray")
+                .attr("viewBox", [0, 0, barchart_width, barchart_height])
+                .attr("style", "max-width: 100%; height: auto;");
+
+            let impressions_x = d3.scaleBand()
+                .domain(Object.keys(impressions_count))
+                .range([0, barchart_width - padding.left - padding.right])
+
+            let impressions_y = d3.scaleLinear()
+                .domain([0, Math.max(...Object.values(impressions_count))])
+                .range([barchart_height - padding.bottom - padding.top, 0]);
+
+            // add axis with ticks rotated by 45 degrees
+            impressions_svg.append("g")
+                .attr("transform", "translate(" + padding.left + "," + (barchart_height - padding.bottom) + ")")
+                .call(d3.axisBottom(impressions_x).tickFormat(d => d).tickSizeOuter(0))
+                .selectAll("text")
+                .attr("transform", "rotate(45)")
+                .attr("text-anchor", "start");
+
+            impressions_svg.append("g")
+                .attr("transform", "translate(" + padding.left + "," + (padding.top) + ")")
+                .call(d3.axisLeft(impressions_y).ticks(4, "d"));
+
+            impressions_svg.selectAll("rect")
+                .data(Object.keys(impressions_count))
+                .join("rect")
+                .attr("x", d =>  padding.left + impressions_x(d))
+                .attr("y", d => padding.top + impressions_y(impressions_count[d]))
+                .attr("width", impressions_x.bandwidth())
+                .attr("height", d => barchart_height - padding.top - padding.bottom - impressions_y(impressions_count[d]))
+                .attr("fill", "gray");
+        }
+
+        function make_force_directed_graph(div, nodes, links){
+            // force directed layout
+            // https://observablehq.com/@d3/force-directed-graph
+            let svg = div.append("svg")
+                .attr("width", svgwidth)
+                .attr("height", svgheight)
+                .style("border", "1px solid gray")
+                .attr("viewBox", [-500, -500, 1000, 1000])
+                .attr("style", "max-width: 100%; height: auto;");
+
+            let simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id))
+                .force("charge", d3.forceManyBody())
+                .force("center", d3.forceCenter(0, 0))
+                .on("tick", ticked);
+
+            let link = svg.append("g")
+                .attr("stroke", "#999")
+                .attr("stroke-opacity", 0.6)
+                .selectAll("line")
+                .data(links)
+                .join("line")
+                .attr("stroke-width", d => Math.sqrt(d.value));
+
+            let node = svg.append("g")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 1.5)
+                .selectAll("circle")
+                .data(nodes)
+                .join("circle")
+                .attr("r", 5)
+                .attr("fill", d => d.group == 1 ? "red" : "black")
+                .attr("title", d => d.id)
+
+            node.call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+            function ticked() {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+            }
+
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.fy = event.subject.y;
+            }
+
+            // Update the subject (dragged node) position during drag.
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+
+            // Restore the target alpha so the simulation cools after dragging ends.
+            // Unfix the subject position now that it’s no longer being dragged.
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+        }
+
+        function draw_interval(data, time_interval){
+            data = data.filter(d => d.unix_timestamp >= time_interval[0] && d.unix_timestamp <= time_interval[1]);
+            // console.log(data.filter(d => parseInt(d.impression_count) <= 1))
+            // console.log(data.filter(d => d.is_retweet == "yes"))
+            if (dev_mode) data = data.filter(d => parseInt(d.impression_count) > 1)
+
+            let nodes = []
+            let links = []
+
+            let div = d3.select("body")
+                .append("div")
+                .style("display", "inline-block")
+                .style("margin", "10px")
+                .style("width", svgwidth + "px")
+                .style("align-self", "baseline")
+
+            let stats = find_stats(data, false)
+            console.log(data)
+            // console.log(nodes.length)
+
+            // add quoted and retweeted users to nodes
+            stats.totalUsers.forEach(user => {
+                nodes.push({
+                    id: user,
+                    group: 1
+                })
+            })
+
+            data.forEach(tweet => {
+                if (tweet.is_retweet == "yes"){
+                    return;
+                }
+
+                // add author to nodes
+                if (!nodes.find(n => n.id == tweet.author_id)) nodes.push({
+                    id: tweet.author_id,
+                    group: 2
+                })
+
+                // add links
+                if (tweet.retweeted_user != ""){
+                    links.push({
+                        source: tweet.author_id,
+                        target: tweet.retweeted_user,
+                        value: 1
+                    })
+                }
+                if (tweet.quoted_user != ""){
+                    links.push({
+                        source: tweet.author_id,
+                        target: tweet.quoted_user,
+                        value: 1
+                    })
+                }
+                if (tweet.replied_user != ""){
+                    links.push({
+                        source: tweet.author_id,
+                        target: tweet.replied_user,
+                        value: 1
+                    })
+                }
+            })
+
+            make_force_directed_graph(div, nodes, links);
+
+            // append other info
+            div.append("div")
+                .html(unix_time_to_date(time_interval[0]) + " - " + unix_time_to_date(time_interval[1]))
+
+            // total number of tweets
+            div.append("div")
+                .html("<b>number of tweets:</b> " + data.length)
+
+            if (data.length == 0) return
+
+            // count distribution of impressions
+            let impressions = data.map(d => parseInt(d.impression_count))
+            let impressions_count = {}
+            impressions.forEach(i => {
+                if (impressions_count[i] == undefined) impressions_count[i] = 0;
+                impressions_count[i] += 1;
+            })
+            // group array entries in a maximum of 10 bins
+            let max_impressions = Math.max(...impressions);
+            let bin_size = Math.ceil(max_impressions / 200);
+            let binned_impressions = {}
+            impressions.forEach(i => {
+                let bin = Math.floor(i / bin_size) * bin_size;
+                if (binned_impressions[bin] == undefined) binned_impressions[bin] = 0;
+                binned_impressions[bin] += 1;
+            })
+            impressions_count = binned_impressions;
+
+            make_barchart(impressions_count, div, "Distribution of impressions");
+
+            // count words used in tweets
+            let words = {}
+            data.forEach(d => {
+                if (d.is_retweet == "yes") return;
+                [... new Set(d.body.split(" "))].forEach(w => {
+                    w = w.toLowerCase().trim();
+                    if (stopwords.includes(w)) return;
+                    if (w.length <= 2) return;
+                    if (w.startsWith("@")) return;
+                    if (words[w] == undefined) words[w] = 0;
+                    words[w] += 1;
+                })
+            })
+            // remove all words that only appear once
+            words = Object.keys(words).filter(k => words[k] > 1).reduce((obj, key) => {
+                obj[key] = words[key];
+                return obj;
+            }, {});
+
+            if (Object.values(words).length != 0){
+                // remove words under a certain percentage of total words
+                let total_words = Object.values(words).reduce((a, b) => a + b);
+                words = Object.keys(words).filter(k => words[k] / total_words > 0.007).reduce((obj, key) => {
+                    obj[key] = words[key];
+                    return obj;
+                }, {});
+
+                make_barchart(words, div, "Words used");
+            }
+
+            // count the most mentioned user
+            let mentioned_users = {}
+            data.forEach(d => {
+                if (d.is_retweet == "yes") return;
+                d.body.split(" ").forEach(w => {
+                    if (w.startsWith("@")){
+                        w = w.toLowerCase().trim();
+                        if (mentioned_users[w] == undefined) mentioned_users[w] = 0;
+                        mentioned_users[w] += 1;
+                    }
+                })
+            })
+                  
+            if (Object.keys(mentioned_users).length != 0) {
+
+                // get the ten most mentioned users
+                mentioned_users = Object.keys(mentioned_users).map(k => [k, mentioned_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+                mentioned_users = mentioned_users.reduce((obj, key) => {
+                    obj[key[0]] = key[1];
+                    return obj;
+                }, {});
+
+                make_barchart(mentioned_users, div, "Most mentioned users");
+
+                // most mentioned user's most recent tweet in the original data
+                let most_mentioned_user = Object.keys(mentioned_users).reduce((a, b) => mentioned_users[a] > mentioned_users[b] ? a : b)
+                let most_mentioned_user_tweets = original_data.filter(d => "@" + d.author == most_mentioned_user)
+
+                let most_mentioned_user_tweet = most_mentioned_user_tweets.filter(d => parseInt(d.unix_timestamp) < time_interval[1])
+                // console.log(most_mentioned_user_tweet)
+                
+                if (most_mentioned_user_tweet.length != 0) {
+                    most_mentioned_user_tweet = most_mentioned_user_tweet.reduce((a, b) => parseInt(a.unix_timestamp) > parseInt(b.unix_timestamp) ? a : b)
+                    div.append("div")
+                        .html("<b>most mentioned user's most recent tweet up to this time interval:</b> ")
+                    
+                        div.append("div")
+                    .style("border", "1px solid gray")
+                    .style("border-radius", "5px")
+                    .style("padding", "5px")
+                    .style("margin", "5px")
+                    .style("width", "90%")
+                    .style("height", "auto")
+                    .style("overflow", "auto")
+                    .html("<b>" + most_mentioned_user_tweet.author + "</b>" + most_mentioned_user_tweet.timestamp + " --- " + most_mentioned_user_tweet.body + " --- <a href='" + most_mentioned_user_tweet.link + "'>link</a> <br> " + 
+                        most_mentioned_user_tweet.like_count + " likes, " + most_mentioned_user_tweet.retweet_count + " retweets, " + most_mentioned_user_tweet.reply_count + " replies, " + most_mentioned_user_tweet.quote_count + " quotes")
+            
+                    } 
+                }
+
+            // count the most retweeted user
+            let retweeted_users = {}
+            data.forEach(d => {
+                if (d.retweeted_user == "") return;
+                if (retweeted_users[d.retweeted_user] == undefined) retweeted_users[d.retweeted_user] = 0;
+                retweeted_users[d.retweeted_user] += 1;
+            })
+            console.log(retweeted_users)
+
+            if (Object.keys(retweeted_users).length != 0){
+                // get the ten most retweeted users
+                retweeted_users = Object.keys(retweeted_users).map(k => [k, retweeted_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+                retweeted_users = retweeted_users.reduce((obj, key) => {
+                    obj[key[0]] = key[1];
+                    return obj;
+                }, {});
+
+                make_barchart(retweeted_users, div, "Most retweeted users");
+
+                // most retweeted user's most recent tweet in the original data
+                let most_retweeted_user = Object.keys(retweeted_users).reduce((a, b) => retweeted_users[a] > retweeted_users[b] ? a : b)
+                let most_retweeted_user_tweets = original_data.filter(d => d.author == most_retweeted_user)
+
+                let most_retweeted_user_tweet = most_retweeted_user_tweets.filter(d => parseInt(d.unix_timestamp) < time_interval[1])
+
+                
+                if (most_retweeted_user_tweet.length != 0) {
+                    most_retweeted_user_tweet = most_retweeted_user_tweet.reduce((a, b) => parseInt(a.unix_timestamp) > parseInt(b.unix_timestamp) ? a : b)
+                    div.append("div")
+                        .html("<b>most retweeted user's most recent tweet up to this time interval:</b> ")
+                    
+                    div.append("div")
+                    .style("border", "1px solid gray")
+                    .style("border-radius", "5px")
+                    .style("padding", "5px")
+                    .style("margin", "5px")
+                    .style("width", "90%")
+                    .style("height", "auto")
+                    .style("overflow", "auto")
+                    .html("<b>" + most_retweeted_user_tweet.author + "</b>" + most_retweeted_user_tweet.timestamp + " --- " + most_retweeted_user_tweet.body + " --- <a href='" + most_retweeted_user_tweet.link + "'>link</a> <br> " + 
+                        most_retweeted_user_tweet.like_count + " likes, " + most_retweeted_user_tweet.retweet_count + " retweets, " + most_retweeted_user_tweet.reply_count + " replies, " + most_retweeted_user_tweet.quote_count + " quotes")
+            
+                } 
+            }
+            
+            // most quoted user
+            let quoted_users = {}
+            data.forEach(d => {
+                if (d.quoted_user == "") return;
+                if (quoted_users[d.quoted_user] == undefined) quoted_users[d.quoted_user] = 0;
+                quoted_users[d.quoted_user] += 1;
+            })
+
+            if (Object.keys(quoted_users).length != 0){
+                // get the ten most quoted users
+                quoted_users = Object.keys(quoted_users).map(k => [k, quoted_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+                quoted_users = quoted_users.reduce((obj, key) => {
+                    obj[key[0]] = key[1];
+                    return obj;
+                }, {});
+
+                make_barchart(quoted_users, div, "Most quoted users");
+
+                // most quoted user's most recent tweet in the original data
+                let most_quoted_user = Object.keys(quoted_users).reduce((a, b) => quoted_users[a] > quoted_users[b] ? a : b)
+                let most_quoted_user_tweets = original_data.filter(d => d.author == most_quoted_user)
+
+                let most_quoted_user_tweet = most_quoted_user_tweets.filter(d => parseInt(d.unix_timestamp) < time_interval[1])
+                
+                if (most_quoted_user_tweet.length != 0) {
+                    most_quoted_user_tweet = most_quoted_user_tweet.reduce((a, b) => parseInt(a.unix_timestamp) > parseInt(b.unix_timestamp) ? a : b)
+                    div.append("div")
+                        .html("<b>most quoted user's most recent tweet up to this time interval:</b>")
+                    
+                    // make rounded rectangle with borders
+                    div.append("div")
+                        .style("border", "1px solid gray")
+                        .style("border-radius", "5px")
+                        .style("padding", "5px")
+                        .style("margin", "5px")
+                        .style("width", "90%")
+                        .style("height", "auto")
+                        .style("overflow", "auto")
+                        .html("<b>" + most_quoted_user_tweet.author + "</b>" + most_quoted_user_tweet.timestamp + " --- " + most_quoted_user_tweet.body + " --- <a href='" + most_quoted_user_tweet.link + "'>link</a> <br> " + 
+                            most_quoted_user_tweet.like_count + " likes, " + most_quoted_user_tweet.retweet_count + " retweets, " + most_quoted_user_tweet.reply_count + " replies, " + most_quoted_user_tweet.quote_count + " quotes")
+                } 
+            }
+
+            div.append("br")
+            div.append("br")
+            div.append("br")
+
+            // most liked tweet
+            let most_liked = data.reduce((a, b) => parseInt(a.like_count) > parseInt(b.like_count) ? a : b)
+            div.append("div")
+                .html("<b>most liked tweet [" + most_liked.like_count + "]:</b> " + most_liked.author + " --- " + most_liked.body + " --- <a href='" + most_liked.link + "'>link</a>")
+
+            // most retweeted tweet
+            let most_retweeted = data.reduce((a, b) => parseInt(a.retweet_count) > parseInt(b.retweet_count) ? a : b)
+            div.append("div")
+                .html("<b>most retweeted tweet [" + most_retweeted.retweet_count + "]:</b> " + most_retweeted.author + " --- " + most_retweeted.body + " --- <a href='" + most_retweeted.link + "'>link</a>")
+        
+            // most replied tweet
+            let most_replied = data.reduce((a, b) => parseInt(a.reply_count) > parseInt(b.reply_count) ? a : b)
+            div.append("div")
+                .html("<b>most replied tweet [" + most_replied.reply_count + "]:</b> " + most_replied.author + " --- " + most_replied.body + " --- <a href='" + most_replied.link + "'>link</a>")
+
+            // most quoted tweet
+            let most_quoted = data.reduce((a, b) => parseInt(a.quote_count) > parseInt(b.quote_count) ? a : b)
+            div.append("div")
+                .html("<b>most quoted tweet [" + most_quoted.quote_count + "]:</b> " + most_quoted.author + " --- " + most_quoted.body + " --- <a href='" + most_quoted.link + "'>link</a>")
+            
+            // tweet with most impressions
+            let most_impressions = data.reduce((a, b) => parseInt(a.impression_count) > parseInt(b.impression_count) ? a : b)
+            div.append("div")
+                .html("<b>most impressions [" + most_impressions.impression_count + "]:</b> " + most_impressions.author + " --- " + most_impressions.body + " --- <a href='" + most_impressions.link + "'>link</a>")
+
+            // repeated tweet bodies
+            let repeated_bodies = {}
+            data.filter(d => d.is_retweet == "no").forEach(d => {
+                if (repeated_bodies[d.body] == undefined) repeated_bodies[d.body] = 0;
+                repeated_bodies[d.body] += 1;
+            })
+            // remove all tweets that only appear once
+            repeated_bodies = Object.keys(repeated_bodies).filter(k => repeated_bodies[k] > 1).reduce((obj, key) => {
+                obj[key] = repeated_bodies[key];
+                return obj;
+            }, {});
+
+            if (Object.keys(repeated_bodies).length > 0){
+                repeated_bodies = Object.keys(repeated_bodies).map(k => [k, repeated_bodies[k]]).sort((a, b) => b[1] - a[1])
+                div.append("div")
+                    .html("<b>repeated tweet bodies (excluding retweets):</b><br> " + repeated_bodies.slice(0, 5).map(d => d[0] + " [" + d[1] + "]").join("<br>"))
+            }
+        }
+
+            
+        function unix_time_to_date(unix_timestamp){
+            let date = new Date(unix_timestamp * 1000);
+            return (date.getDay() + 1) + "/" + (date.getMonth() + 1) + " " + date.getHours() + ":" + date.getMinutes();
+        }
+
+        async function init(){
+            let data = await d3.csv("data.csv");
+            original_data = data;
+            
+            let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+            let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+            
+            let num_intervals;
+            if (!dev_mode){
+                num_intervals = 1600;
+            } else {
+                num_intervals = 10;
+            }
+            
+            let timestep = (maxtime - mintime) / num_intervals;
+            for (let i = 0; i < num_intervals; i++){
+                let time_interval = [mintime + i * timestep, mintime + (i + 1) * timestep];
+                draw_interval(data, time_interval);
+                if (i == 40) break;
+            }
+
+            // print_stats(data);
+        }
+
+        init();
+    </script>
+</html>
