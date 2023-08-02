@@ -5,6 +5,7 @@
         <!-- include d3 -->
         <script src="https://d3js.org/d3.v7.min.js"></script>
         <script src="js/stopwords.js"></script>
+        <script src="js/layered_graph.js"></script>
 
         <style>
             body {
@@ -145,15 +146,33 @@
                 .join("line")
                 .attr("stroke-width", d => Math.sqrt(d.value));
 
-            let node = svg.append("g")
-                .attr("stroke", "#fff")
-                .attr("stroke-width", 1.5)
-                .selectAll("circle")
+            let label = svg.append("g")
+
+            label.append("text")
+                .attr("class", "label")
+                .attr("fill", "black")
+                .attr("font-size", "10px")
+                .attr("font-family", "sans-serif")
+                .attr("text-anchor", "middle")
+                .text("")
+
+            let node = svg.selectAll(".node")
                 .data(nodes)
-                .join("circle")
+                .enter()
+                .append("g")
+
+            node.append("circle")
                 .attr("r", 5)
                 .attr("fill", d => d.group == 1 ? "red" : "black")
-                .attr("title", d => d.id)
+                // .attr("title", d => d.id)
+
+            // node.append("text")
+            //     .attr("class", "label")
+            //     .attr("fill", "black")
+            //     .attr("font-size", "20px")
+            //     .attr("font-family", "sans-serif")
+            //     .attr("text-anchor", "middle")
+            //     .text(d => d.group == 1? d.id : "")
 
             node.call(d3.drag()
                 .on("start", dragstarted)
@@ -168,8 +187,7 @@
                     .attr("y2", d => d.target.y);
 
                 node
-                    .attr("cx", d => d.x)
-                    .attr("cy", d => d.y);
+                    .attr("transform", d => "translate(" + d.x + "," + d.y + ")")
             }
 
             function dragstarted(event) {
@@ -506,13 +524,15 @@
 
             
         function unix_time_to_date(unix_timestamp){
-            let date = new Date(unix_timestamp * 1000);
+            let date = new Date(parseInt(unix_timestamp)*1000);
             return (date.getDay() + 1) + "/" + (date.getMonth() + 1) + " " + date.getHours() + ":" + date.getMinutes();
         }
 
         async function init(){
-            let data = await d3.csv("data.csv");
+            let data = await d3.csv("data/data.csv");
             original_data = data;
+
+            // make_layered_graph(data);
             
             let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
             let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
@@ -530,8 +550,6 @@
                 draw_interval(data, time_interval);
                 if (i == 40) break;
             }
-
-            // print_stats(data);
         }
 
         init();

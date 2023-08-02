@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<meta charset="UTF-8">
+    <head>
+        <!-- include d3 -->
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="js/stopwords.js"></script>
+
+        <style>
+            body {
+                font-family: sans-serif;
+                color: gray;
+                font-size: small;
+            }
+        </style>
+    </head>
+    <body>
+    </body>
+    <script>
+        function drawGraph(nodes, links){
+            let svgwidth = 1000;
+            let svgheight = 1000;
+
+            let div = d3.select("body").append("div")
+                .attr("width", window.innerWidth)
+                .attr("height", window.innerHeight)
+                .style("border", "1px solid gray")
+                .style("margin", "10px")
+                .style("padding", "10px");
+
+            let svg = div.append("svg")
+                .attr("width", svgwidth)
+                .attr("height", svgheight)
+                .style("border", "1px solid gray")
+                .attr("viewBox", [-1000, -1000, 2000, 2000])
+                .attr("style", "max-width: 100%; height: auto;");
+
+            let simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id))
+                .force("charge", d3.forceManyBody())
+                .force("center", d3.forceCenter(0, 0))
+                .on("tick", ticked);
+
+            let link = svg.append("g")
+                .attr("stroke", "#999")
+                .attr("stroke-opacity", 0.6)
+                .selectAll("line")
+                .data(links)
+                .join("line")
+                .attr("stroke-width", d => Math.sqrt(d.value));
+
+            let node = svg
+                .selectAll(".node")
+                .data(nodes)
+                .enter()
+                .append("g")
+
+            // the "speakers" are red
+            node.append("circle")
+                .attr("r", 5)
+                .attr("fill", d => d.group == 1 ? "red" : "black")
+
+            // add labels to nodes of group 1
+            node
+                .append("text")
+                .attr("class", "label")
+                .attr("fill", "black")
+                .text(d => d.group == 1 ? d.id : "")
+                .attr("text-anchor", "middle")
+                .attr("font-size", "15px");
+
+            // add labels on hover to nodes containing the body of the tweets
+            node
+                .append("title")
+                .text(d => d.text);
+
+            node.call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+            function ticked() {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                node
+                    .attr("transform", d => `translate(${d.x}, ${d.y})`);
+            }
+
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.fy = event.subject.y;
+            }
+
+            // Update the subject (dragged node) position during drag.
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+
+            // Restore the target alpha so the simulation cools after dragging ends.
+            // Unfix the subject position now that it’s no longer being dragged.
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+        }
+
+        function makeGraph(data){
+            let nodes = [];
+            let links = [];
+
+            for (let tweet of data){
+                tweet["text"] = tweet["text"].toLowerCase();
+                tweet["text"] = tweet["text"].trim();
+
+                // find mentions
+                let mentions = tweet["text"].match(/@\w+/g);
+                
+                if (mentions){
+                    for (let mention of mentions){
+                        mention = mention.replace("@", "");
+                        if (mention != tweet["screen_name"]){
+                            let link = {
+                                "source": tweet["screen_name"],
+                                "target": mention
+                            }
+                            links.push(link);
+                        }
+                    }
+                }
+
+                // add tweet author as node only if no node already exists with that id
+                let node = {
+                    "id": tweet["screen_name"],
+                    "text": tweet["text"],
+                    "group": 1
+                }
+                if (!nodes.find(n => n.id == node.id)){
+                    nodes.push(node);
+                }
+
+                // add mentions as nodes only if no node already exists with that id
+                if (mentions){
+                    for (let mention of mentions){
+                        mention = mention.replace("@", "");
+                        let node = {
+                            "id": mention,
+                            "text": tweet["text"],
+                            "group": 2
+                        }
+                        if (!nodes.find(n => n.id == node.id)){
+                            nodes.push(node);
+                        }
+                    }
+                }
+            }
+
+            // draw the graph
+            drawGraph(nodes, links);
+        }
+
+        async function init(){
+            let data;
+
+            let filenames = [
+                "data/accounts_high_antisemitism_feb01.csv",
+                "data/accounts_high_antisemitism_feb08.csv",
+                "data/accounts_high_antisemitism_feb15_mar01.csv",
+                "data/accounts_high_antisemitism_feb15.csv",
+                "data/accounts_high_antisemitism_mar01_mar08.csv",
+
+                "data/follower_accounts_high_antisemitism_feb01.csv",
+                "data/follower_accounts_high_antisemitism_feb08.csv",
+                "data/follower_accounts_high_antisemitism_feb08_to_feb15.csv",
+                "data/follower_accounts_high_antisemitism_feb15_to_feb22.csv",
+                "data/follower_accounts_high_antisemitism_feb22_to_mar01.csv"
+            ]
+
+            for (let filename of filenames){
+                data = await d3.csv(filename);
+                
+                d3.select("body")
+                    .append("h1")
+                    .html(filename + "<br>");
+
+                makeGraph(data);
+
+                d3.select("body")
+                    .append("br");
+            }
+        }
+
+        init();
+    </script>
+</html>
