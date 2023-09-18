@@ -6,6 +6,8 @@
         <script src="https://d3js.org/d3.v7.min.js"></script>
         <script src="js/stopwords.js"></script>
         <script src="js/layered_graph.js"></script>
+        <script src="https://unpkg.com/@hpcc-js/wasm@0.3.11/dist/index.min.js"></script>
+        <script src="https://unpkg.com/d3-graphviz@3.0.5/build/d3-graphviz.js"></script>
 
         <style>
             body {
@@ -17,6 +19,7 @@
         </style>
     </head>
     <body>
+        <div id="graph" style="text-align: center;"></div>
     </body>
     <script>
 
@@ -26,7 +29,7 @@
         let svgheight = 300;
         let original_data;
 
-        let dev_mode = true;
+        let dev_mode = false;
 
         function find_stats(data, verbose=true){
             // number of tweets
@@ -524,18 +527,27 @@
 
             
         function unix_time_to_date(unix_timestamp){
-            let date = new Date(parseInt(unix_timestamp)*1000);
+            let date = new Date(parseInt(unix_timestamp) * 1000);
             return (date.getDay() + 1) + "/" + (date.getMonth() + 1) + " " + date.getHours() + ":" + date.getMinutes();
         }
 
-        async function init(){
-            let data = await d3.csv("data/data.csv");
+        async function init2(){
+            let data = await d3.csv("data/data_reduced.csv");
             original_data = data;
+
+            // // // sort the data by timestamp
+            // data = data.sort((a, b) => parseInt(a.unix_timestamp) - parseInt(b.unix_timestamp));
+            // // get the first 1000 items
+            // data = data.slice(0, 100);
+            // // print it in csv form
+            // console.log(d3.csvFormat(data));
 
             // make_layered_graph(data);
             
             let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
             let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+            console.log(mintime, maxtime)
             
             let num_intervals;
             if (!dev_mode){
@@ -548,8 +560,56 @@
             for (let i = 0; i < num_intervals; i++){
                 let time_interval = [mintime + i * timestep, mintime + (i + 1) * timestep];
                 draw_interval(data, time_interval);
-                if (i == 40) break;
+                if (i == 10) break;
             }
+        }
+
+        async function init(){
+            let data = await d3.csv("data/bbclaurak-isretweet-9a4d0867b0d8bb94bd738ddaef2f7c7b - main_sheet_leave_as_is_pls.csv");
+
+            console.log(data)
+
+            let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+            let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+            // print mintime from unixtimestamp to date
+            console.log(unix_time_to_date(mintime));
+            console.log(unix_time_to_date(maxtime));
+
+            // print most mentioned user
+            let mentioned_users = {}
+            data.forEach(d => {
+                if (d.is_retweet == "yes") return;
+                d.body.split(" ").forEach(w => {
+                    if (w.startsWith("@")){
+                        w = w.toLowerCase().trim();
+                        if (mentioned_users[w] == undefined) mentioned_users[w] = 0;
+                        mentioned_users[w] += 1;
+                    }
+                })
+            })
+
+            // get the ten most mentioned users
+            mentioned_users = Object.keys(mentioned_users).map(k => [k, mentioned_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            mentioned_users = mentioned_users.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+
+            console.log(mentioned_users);
+
+            // get all the tweets of the ten most mentioned users
+            for (let user in mentioned_users){
+                console.log(user)
+                let tweets = data.filter(d => "@" + d.author == user);
+                console.log(tweets);
+
+                // find the tweets that mention this user
+                let mentions = data.filter(d => d.body.includes(user));
+                console.log(mentions);
+            }
+
+            // console.log(mintime, maxtime);
         }
 
         init();

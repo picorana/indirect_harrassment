@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<meta charset="UTF-8">
+    <head>
+        <!-- include d3 -->
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="js/stopwords.js"></script>
+        <script src="js/layered_graph.js"></script>
+        <script src="https://unpkg.com/@hpcc-js/wasm@0.3.11/dist/index.min.js"></script>
+        <script src="https://unpkg.com/d3-graphviz@3.0.5/build/d3-graphviz.js"></script>
+        <script src="js/graphviz.js"></script>
+        <script src="js/graph.js"></script>
+
+        <style>
+            body {
+                font-family: sans-serif;
+                color: gray;
+                font-size: small;
+                display: inline-flex;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="graph" style="text-align: center;"></div>
+    </body>
+    <script>
+
+        async function init(){
+            let data = await d3.csv("data/data_reduced.csv");
+            original_data = data;
+
+            let graph = new Graph();
+
+            let start_date = Math.min.apply(0, data.map(d => parseInt(d.unix_timestamp)));
+            let end_date = Math.max.apply(0, data.map(d => parseInt(d.unix_timestamp)));
+            
+            // one hour
+            let interval_length = 60 * 60;
+
+            let interval_count = Math.ceil((end_date - start_date) / interval_length);
+
+            // add all the layer markers
+            for (let i = 0; i < interval_count; i+= 1){
+                let n = {layer: i, type: "layer_marker"}
+                graph.add_node(n);
+
+                // add connection to previous edge
+                if (i != 0){
+                    let prevn = graph.node_index[i - 1].find(n => n.type == "layer_marker")
+                    let e = {nodes: [prevn, n], type: "layer_marker_edge"}
+                    graph.add_edge(e);
+                }
+            }
+
+            // add the nodes
+            for (let i in data){
+                let d = data[i];
+                // console.log(d)
+                let n = {layer: Math.floor((parseInt(d.unix_timestamp) - start_date) / interval_length), type: "tweet", label: '"' + d.author + '"'}
+                graph.add_node(n);
+            }
+
+            // for every entry in nodeindex, add edges to all other nodes in the same layer
+            for (let i = 0 ; i < graph.node_index.length; i += 1){
+                let layer = graph.node_index[i];
+                let layer_marker = layer.find(n => n.type == "layer_marker");
+                for (let j = 0; j < graph.node_index[i].length; j += 1){
+                    let node = graph.node_index[i][j];
+                    if (node.type == "layer_marker") continue;
+                    let e = {nodes: [layer_marker, node], type: "layer_marker_edge"}
+                    graph.add_edge(e);
+                }
+            }
+
+            console.log(graph)
+
+            draw_graphviz(graph);
+        }
+
+        init();
+    </script>
+</html>
