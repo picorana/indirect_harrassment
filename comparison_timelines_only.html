@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html>
+<meta charset="UTF-8">
+    <head>
+        <!-- include d3 -->
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="js/stopwords.js"></script>
+        <script src="js/layered_graph.js"></script>
+        <script src="https://unpkg.com/@hpcc-js/wasm@0.3.11/dist/index.min.js"></script>
+        <script src="https://unpkg.com/d3-graphviz@3.0.5/build/d3-graphviz.js"></script>
+
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm" crossorigin="anonymous"></script>
+
+        <style>
+            body {
+                font-family: sans-serif;
+                color: gray;
+                font-size: small;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="container" class="container-xl text-center" style="padding-top: 5%;">
+        </div>
+    </body>
+    <script>
+        let svgwidth = 500;
+        let svgheight = 300;
+        let original_data;
+
+        let collapse_count = 0;
+
+        let display_networks = true;
+        let original_lauradata, original_lindata;
+        let laura_important_people = [];
+        let lin_important_people = [];
+
+        function unix_time_to_date(unix_timestamp){
+            let date = new Date(unix_timestamp * 1000);
+            // print month and day, then hours and minutes
+            return date.toLocaleString("en-GB", {month: "short", day: "numeric", hour: "numeric", minute: "numeric"});
+        }
+
+        function most_tweets(data, div){
+            let authors = {}
+            data.forEach(d => {
+                if (authors[d.author] == undefined) authors[d.author] = 0;
+                authors[d.author] += 1;
+            })
+
+            // get the ten most mentioned users
+            authors = Object.keys(authors).map(k => [k, authors[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            authors = authors.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+
+            // append the list of authors
+            let list = div.append("ul");
+            for (let author in authors){
+                author = "@" + author;
+                // include a twitter link for each author
+                let link = "https://twitter.com/" + author.substring(1);
+                
+                // list.append("li").html("<a href='" + link + "'>" + author + "</a>: " + authors[author] + " tweets");
+
+                let d = list.append("li").append("div")
+                d.append("span").html("<a href='" + link + "'>" + author + "</a>: " + authors[author.substring(1)] + " tweets");
+
+                // append a bootstrap button that shows the tweets of this user
+                d.append("span").append("button").attr("class", "btn")
+                    .style("--bs-btn-padding-x", "0.5rem")
+                    .style("--bs-btn-padding-y", "0.25rem")
+                    .style("font-size", "0.75rem")
+                    .style("line-height", ".75")
+                    .attr("data-bs-toggle", "collapse")
+                    .attr("data-bs-target", "#collapse" + collapse_count)
+                    .attr("aria-expanded", "false")
+                    .attr("aria-controls", "collapse" + collapse_count)
+                    .html("[Show tweets]");
+
+                // get all the tweets of this user
+                let tweets = data.filter(d => d.author == author.substring(1));
+
+                // append them to the list
+                let sublist = list.append("ul")
+                    .attr("class", "collapse")
+                    .attr("id", "collapse" + collapse_count)
+
+                for (let tweet of tweets){
+                    let link = "https://twitter.com/" + tweet.author + "/status/" + tweet.id;
+                    sublist.append("li").html("<a href='" + link + "'>" + "[link]" + "</a> " + "<b>" + tweet.author + ":</b> " + tweet.body);
+                }
+
+                // make a barchart with the number of tweets per day
+                let padding = {top: 30, bottom: 30, left: 30, right: 30}
+                let svg = d.append("div").append("svg").attr("width", svgwidth).attr("height", svgheight/2);
+                let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+                let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+                let interval_length = 60 * 60;
+                let interval_count = Math.ceil((maxtime - mintime) / interval_length);
+                let interval_counts = new Array(interval_count).fill(0);
+                tweets.forEach(d => {
+                    let interval = Math.floor((parseInt(d.unix_timestamp) - mintime) / interval_length);
+                    interval_counts[interval] += 1;
+                })
+                let x = d3.scaleLinear().domain([0, interval_count]).range([0, svgwidth - padding.left - padding.right]);
+                let y = d3.scaleLinear().domain([0, Math.max.apply(0, interval_counts)]).range([svgheight/2 - padding.top - padding.bottom, 0]);
+                let line = d3.line()
+                    .x((d, i) => x(i))
+                    .y(d => y(d))
+                svg.append("path")
+                    .attr("transform", "translate(" + (padding.right) + "," + (padding.top) + ")")
+                    .datum(interval_counts)
+                    .attr("fill", "none")
+                    .attr("stroke", "gray")
+                    .attr("stroke-width", 3)
+                    .attr("d", line);
+                svg.append("g")
+                    .attr("transform", "translate(" + (padding.right) + "," + (svgheight - padding.bottom) + ")")
+                    .call(d3.axisBottom(x));
+                svg.append("g")
+                    .attr("transform", "translate(" + (padding.right) + "," + (padding.top) + ")")
+                    .call(d3.axisLeft(y));
+
+
+                collapse_count += 1;
+            }
+        }
+
+        function most_mentioned_user(data, div, original_data, important_people = {}){
+            let mentioned_users = {}
+            data.forEach(d => {
+                if (d.is_retweet == "yes") return;
+                d.body.split(" ").forEach(w => {
+                    if (w.startsWith("@")){
+                        w = w.toLowerCase().trim();
+                        if (mentioned_users[w] == undefined) mentioned_users[w] = 0;
+                        mentioned_users[w] += 1;
+                    }
+                })
+            })
+
+            // get the ten most mentioned users
+            mentioned_users = Object.keys(mentioned_users).map(k => [k, mentioned_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            mentioned_users = mentioned_users.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+
+            // append the list of authors
+            let list = div.append("ul");
+            for (let author in mentioned_users){
+                // include a twitter link for each author
+                let link = "https://twitter.com/" + author.substring(1);
+
+                // list.append("li").html("<a href='" + link + "'>" + author + "</a>: " + mentioned_users[author] + " mentions");
+
+                let d = list.append("li").append("div")
+                let s = d.append("span")
+                if(Object.keys(important_people).includes(author)){
+                    s.append("span")
+                        .style("color", d3.interpolateSpectral(Object.keys(important_people).indexOf(author) / Object.keys(important_people).length))
+                        .html("●")
+
+                    s.append("span")
+                        .html("<a href='" + link + "'>" + author + "</a>: " + mentioned_users[author] + " mentions");
+                }
+                else s.html("<a href='" + link + "'>" + author + "</a>: " + mentioned_users[author] + " mentions");
+
+                // append a bootstrap button that shows the tweets of this user
+                d.append("span").append("button").attr("class", "btn")
+                    .style("--bs-btn-padding-x", "0.5rem")
+                    .style("--bs-btn-padding-y", "0.25rem")
+                    .style("font-size", "0.75rem")
+                    .style("line-height", ".75")
+                    .attr("data-bs-toggle", "collapse")
+                    .attr("data-bs-target", "#collapse" + collapse_count)
+                    .attr("aria-expanded", "false")
+                    .attr("aria-controls", "collapse" + collapse_count)
+                    .html("[Show tweets]");
+
+                // find the last tweet from this user from the original data, before the end of this timeframe
+                let last_tweet = original_data.filter(d => d.author == author.substring(1) && parseInt(d.unix_timestamp) < parseInt(data[data.length - 1].unix_timestamp)).sort((a, b) => parseInt(b.unix_timestamp) - parseInt(a.unix_timestamp))[0];
+                if (last_tweet != undefined){
+                    let link = "https://twitter.com/" + author + "/status/" + last_tweet.id;
+                    d.append("br");
+                    d.append("span").html("&nbsp; ► <a href='" + link + "'>" + "[link]" + "</a> " + unix_time_to_date(last_tweet.unix_timestamp) + ": " + last_tweet.body);
+                }
+
+                // get all the tweets of this user
+                let tweets = data.filter(d => d.body.toLowerCase().includes(author));
+
+                // append them to the list
+                let sublist = list.append("ul")
+                    .attr("class", "collapse")
+                    .attr("id", "collapse" + collapse_count)
+
+                for (let tweet of tweets){
+                    let link = "https://twitter.com/" + tweet.author + "/status/" + tweet.id;
+                    sublist.append("li").html("<a href='" + link + "'>" + "[link]" + "</a> " + "<b>" + tweet.author + ":</b> " + tweet.body);
+                }
+
+                collapse_count += 1;
+
+            }
+        }
+
+        function distribution_of_tweets(data, div, intervalsize = 60 * 60, important_people = {}, y_scale){
+            let padding = {top: 50, bottom: 50, left: 50, right: 50}
+
+            // get the distribution of tweets over time
+            let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+            let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+            let interval_length = intervalsize;
+            let interval_count = Math.ceil((maxtime - mintime) / interval_length);
+
+            let interval_counts = new Array(interval_count).fill(0);
+
+            data.forEach(d => {
+                let interval = Math.floor((parseInt(d.unix_timestamp) - mintime) / interval_length);
+                interval_counts[interval] += 1;
+            })
+
+            // draw the distribution
+            let svg = div.append("svg").attr("width", svgwidth).attr("height", svgheight);
+            let x = d3.scaleLinear().domain([0, interval_count]).range([0, svgwidth - padding.left - padding.right]);
+            let y = d3.scaleLinear().domain([0, Math.max.apply(0, interval_counts)]).range([svgheight - padding.top - padding.bottom, 0]);
+            // let y = y_scale
+            if (y_scale != undefined) y = y_scale;
+
+            let line = d3.line()
+                .x((d, i) => x(i))
+                .y(d => y(d))
+
+            svg.append("path")
+                .attr("transform", "translate(" + (padding.right) + "," + (padding.top) + ")")
+                .datum(interval_counts)
+                .attr("fill", "none")
+                .attr("stroke", "gray")
+                .attr("stroke-width", 3)
+                .attr("d", line);
+
+            // add the x axis, with the date
+            svg.append("g")
+                .attr("transform", "translate(" + (padding.right) + "," + (svgheight - padding.bottom) + ")")
+                .call(d3.axisBottom(x).ticks(5).tickFormat((d, i) => unix_time_to_date((mintime + i * intervalsize * 10))));
+
+            svg.append("g")
+                .attr("transform", "translate(" + (padding.right) + "," + (padding.top) + ")")
+                .call(d3.axisLeft(y));
+
+            // add a vertical line if there is a tweet from an important person
+            for (let i = 0; i < interval_counts.length; i += 1){
+                let interval = interval_counts[i];
+                if (interval == 0) continue;
+                let interval_start = mintime + i * interval_length;
+                let interval_end = mintime + (i + 1) * interval_length;
+                let interval_data = data.filter(d => parseInt(d.unix_timestamp) >= interval_start && parseInt(d.unix_timestamp) < interval_end);
+                let important_person_tweet = interval_data.find(d => Object.keys(important_people).includes("@" + d.author));
+                if (important_person_tweet != undefined){
+                    let x1 = x(i) + padding.right;
+                    let y1 = padding.top;
+                    let x2 = x(i) + padding.right;
+                    let y2 = svgheight - padding.bottom;
+                    svg.append("line")
+                        .attr("x1", x1)
+                        .attr("y1", y1)
+                        .attr("x2", x2)
+                        .attr("y2", y2)
+                        .attr("stroke", d3.interpolateSpectral(Object.keys(important_people).indexOf("@" + important_person_tweet.author) / Object.keys(important_people).length))
+                        .attr("stroke-width", 2)
+                        .attr("stroke-dasharray", "5,5");
+
+                    // add the name of the person close to the line, rotated vertically
+                    svg.append("g")
+                        .attr("transform", "translate(" + (x1 - 5) + "," + (y1 + 5) + ")")
+                        .append("text")
+                        .attr("transform", "rotate(-90)")
+                        .attr("text-anchor", "end")
+                        .attr("font-size", "0.75rem")
+                        .attr("fill", d3.color(d3.interpolateSpectral(Object.keys(important_people).indexOf("@" + important_person_tweet.author) / Object.keys(important_people).length)).darker(1.5))
+                        .text(important_person_tweet.author);
+                }
+            }
+        }
+
+        function print_time(data, div){
+            let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+            let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+            div.append("div")
+                .html("From " + unix_time_to_date(mintime) + " to " + unix_time_to_date(maxtime) + "");
+
+            // total tweets in this timeframe:
+            div.append("div")
+                .html("Total tweets in this timeframe: " + data.length + "<br><br>");
+        }
+
+        function most_replied_to_user(data, div, original_data, important_people = {}){
+            let retweeted_users = {}
+            data.forEach(d => {
+                // console.log(d)
+                if (d.reply_to == "" || d.reply_to == undefined) {
+                    return;
+                }
+                if (retweeted_users[d.reply_to] == undefined) retweeted_users[d.reply_to] = 0;
+                retweeted_users[d.reply_to] += 1;
+            })
+
+            // get the ten most retweeted users
+            retweeted_users = Object.keys(retweeted_users).map(k => [k, retweeted_users[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            retweeted_users = retweeted_users.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+
+            // append the list of authors
+            let list = div.append("ul");
+            for (let author in retweeted_users){
+                // include a twitter link for each author
+                let link = "https://twitter.com/" + author;
+                let d = list.append("li").append("div")
+                let s = d.append("span")
+                // console.log(Object.keys(important_people), author)
+                if(Object.keys(important_people).includes("@" + author)){
+                    s.append("span")
+                        .style("color", d3.interpolateSpectral(Object.keys(important_people).indexOf("@" + author) / Object.keys(important_people).length))
+                        .html("●")
+
+                    s.append("span")
+                        .html("<a href='" + link + "'>" + author + "</a>: " + retweeted_users[author] + " mentions");
+                }
+                else s.html("<a href='" + link + "'>" + author + "</a>: " + retweeted_users[author] + " mentions");
+                // d.append("span").html("<a href='" + link + "'>@" + author + "</a>: " + retweeted_users[author] + " replies");
+
+                // append a bootstrap button that shows the tweets of this user
+                d.append("span").append("button").attr("class", "btn")
+                    .style("--bs-btn-padding-x", "0.5rem")
+                    .style("--bs-btn-padding-y", "0.25rem")
+                    .style("font-size", "0.75rem")
+                    .style("line-height", ".75")
+                    .attr("data-bs-toggle", "collapse")
+                    .attr("data-bs-target", "#collapse" + collapse_count)
+                    .attr("aria-expanded", "false")
+                    .attr("aria-controls", "collapse" + collapse_count)
+                    .html("[Show tweets]");
+
+                // find the last tweet from this user from the original data, before the end of this timeframe
+                let last_tweet = original_data.filter(d => d.author == author && parseInt(d.unix_timestamp) < parseInt(data[data.length - 1].unix_timestamp)).sort((a, b) => parseInt(b.unix_timestamp) - parseInt(a.unix_timestamp))[0];
+                if (last_tweet != undefined){
+                    let link = "https://twitter.com/" + author + "/status/" + last_tweet.id;
+                    d.append("br");
+                    d.append("span").html("&nbsp; ► <a href='" + link + "'>" + "[link]" + "</a> " + unix_time_to_date(last_tweet.unix_timestamp) + ": " + last_tweet.body);
+                }
+
+                // get all the tweets of this user
+                let tweets = data.filter(d => d.reply_to == author);
+
+                // append them to the list
+                let sublist = list.append("ul")
+                    .attr("class", "collapse")
+                    .attr("id", "collapse" + collapse_count);
+
+                for (let tweet of tweets){
+                    let link = "https://twitter.com/" + tweet.author + "/status/" + tweet.id;
+                    sublist.append("li").html("<a href='" + link + "'>" + "[link]" + "</a> " + "<b>" + tweet.author + ":</b> " + tweet.body);
+                }
+
+                collapse_count += 1;
+            }
+        }
+
+        function draw_force_directed_graph(nodes, edges, svg){
+
+            // draw the graph with a force layout. the mentioned users should also have a label. do not use graphviz.
+            let simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(edges).id(d => d.id))
+                    .force("charge", d3.forceManyBody().strength(-10))
+                    .force("center", d3.forceCenter(svgwidth / 2, svgheight / 2));
+
+                // let link = svg.append("g")
+                //     .attr("stroke", "#999")
+                //     .attr("stroke-opacity", 0.6)
+                //     .selectAll("line")
+                //     .data(edges)
+                //     .join("line")
+                //     .attr("stroke-width", d => Math.sqrt(d.value));
+
+                let node = svg.selectAll(".node")
+                    .data(nodes)
+                    .enter()
+                    .append("g")
+                    .attr("class", "node")
+                    .call(drag(simulation));
+
+                node.append("circle")
+                    .attr("r", d => Math.sqrt(d.value) / 2 + 1)
+                    .attr("stroke", "white")
+                    .attr("fill", "gray");
+
+                node.append("text")
+                    .text(d => most_mentioned_users.find(n => n.id == d.id) != undefined ? d.id : "");
+
+                simulation.on("tick", () => {
+                    // link
+                    //     .attr("x1", d => d.source.x)
+                    //     .attr("y1", d => d.source.y)
+                    //     .attr("x2", d => d.target.x)
+                    //     .attr("y2", d => d.target.y);
+
+                    node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+                });
+
+                function drag(simulation) {
+
+                    function dragstarted(event) {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        event.subject.fx = event.subject.x;
+                        event.subject.fy = event.subject.y;
+                    }
+
+                    function dragged(event) {
+                        event.subject.fx = event.x;
+                        event.subject.fy = event.y;
+                    }
+
+                    function dragended(event) {
+                        if (!event.active) simulation.alphaTarget(0);
+                        event.subject.fx = null;
+                        event.subject.fy = null;
+                    }
+
+                    return d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended);
+                }
+
+        }
+
+        function network_of_replies(data, div){
+            let svg = div.append("svg")
+                .attr("viewBox", [0, 0, svgwidth, svgheight])
+                // .attr("viewBox", [-svgwidth/2, -svgheight/2, svgwidth*2, svgheight*2])
+
+            // get all the retweeted users in data
+            let retweeted_users = {}
+            data.forEach(d => {
+                if (retweeted_users[d.reply_to] == undefined) retweeted_users[d.reply_to] = 0;
+                retweeted_users[d.reply_to] += 1;
+            })
+
+            // the retweeted users are the nodes in the graph
+            let nodes = Object.keys(retweeted_users).map(k => {return {id: k, value: retweeted_users[k], type: "retweeted"}});
+            let edges = [];
+
+            // if a retweeted user is retweeted by another retweeted user, add an edge
+            data.forEach(d => {
+                if (d.is_retweet == "no") return;
+                if (!nodes.find(n => n.id == d.reply_to)) nodes.push({id: d.reply_to, value: 0, type: "retweeted"});
+                if (!nodes.find(n => n.id == d.author)) nodes.push({id: d.author, value: 0, type: "retweeted"});
+                edges.push({source: d.author, target: d.reply_to});
+            })
+
+            // get the ten most retweeted users
+            most_mentioned_users = nodes.sort((a, b) => b.value - a.value).slice(0, 10);
+
+            draw_force_directed_graph(nodes, edges, svg);
+        }
+
+        function network_of_mentions(data, div){
+            try{
+                let svg = div.append("svg")
+                    .attr("viewBox", [0, 0, svgwidth, svgheight])
+                    // .attr("viewBox", [-svgwidth/2, -svgheight/2, svgwidth*2, svgheight*2])
+
+                // get all the mentioned users in data
+                let mentioned_users = {}
+                data.forEach(d => {
+                    if (d.is_retweet == "yes") return;
+                    d.body.split(" ").forEach(w => {
+                        if (w.startsWith("@")){
+                            w = w.toLowerCase().trim();
+                            if (mentioned_users[w] == undefined) mentioned_users[w] = 0;
+                            mentioned_users[w] += 1;
+                        }
+                    })
+                })
+
+                // the mentioned users are the nodes in the graph
+                let nodes = Object.keys(mentioned_users).map(k => {return {id: k, value: mentioned_users[k], type: "mentioned"}});
+                let edges = [];
+
+                // if a mentioned user is mentioned by another mentioned user, add an edge
+                data.forEach(d => {
+                    let mentioned = [];
+                    d.body.split(" ").forEach(w => {
+                        if (w.startsWith("@")){
+                            w = w.toLowerCase().trim();
+                            mentioned.push(w);
+                        }
+                    })
+                    for (let i = 0; i < mentioned.length; i++){
+                        for (let j = i + 1; j < mentioned.length; j++){
+                            if (!nodes.find(n => n.id == mentioned[j])) nodes.push({id: mentioned[j], value: 0, type: "mentioned"});
+                            if (!nodes.find(n => n.id == mentioned[i])) nodes.push({id: mentioned[i], value: 0, type: "mentioned"});
+                            edges.push({source: mentioned[i], target: mentioned[j]});
+                        }
+                    }
+                })
+
+                // get the ten most mentioned users
+                most_mentioned_users = nodes.sort((a, b) => b.value - a.value).slice(0, 10);
+
+                draw_force_directed_graph(nodes, edges, svg);
+
+            } catch (e){
+                console.log(e);
+            }
+        }
+
+        function make_horizontal_network(data, div, interval, important_people){
+            let svg = div.append("svg")
+                .attr("viewbox", [-svgwidth, -svgheight, svgwidth, svgheight]);
+
+            let mintime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+            let maxtime = data.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+            let interval_count = Math.ceil((maxtime - mintime) / interval);
+
+            console.log(interval_count)
+
+            for (let i = 0; i < interval_count; i++){
+                let cur_data = data.filter(d => parseInt(d.unix_timestamp) >= mintime + i * interval && parseInt(d.unix_timestamp) < mintime + (i + 1) * interval);
+                
+                // add a dashed line separating the intervals
+                svg.append("line")
+                    .attr("x1", i * 2 * svgwidth/interval_count + svgwidth/10)
+                    .attr("y1", 0)
+                    .attr("x2", i * 2 * svgwidth/interval_count + svgwidth/10)
+                    .attr("y2", svgheight)
+                    .attr("stroke", "gray")
+                    .attr("stroke-width", 1)
+                    .attr("stroke-dasharray", "5,5");
+
+                // create a network of mentions in this data
+                let mentioned_users = {}
+                cur_data.forEach(d => {
+                    if (d.is_retweet == "yes") return;
+                    d.body.split(" ").forEach(w => {
+                        if (w.startsWith("@")){
+                            w = w.toLowerCase().trim();
+                            if (mentioned_users[w] == undefined) mentioned_users[w] = 0;
+                            mentioned_users[w] += 1;
+                        }
+                    })
+                })
+
+                // the mentioned users are the nodes in the graph
+                let nodes = Object.keys(mentioned_users).map(k => {return {id: k, value: mentioned_users[k], type: "mentioned"}});
+                let edges = [];
+
+                // if a mentioned user is mentioned by another mentioned user, add an edge
+                cur_data.forEach(d => {
+                    let mentioned = [];
+                    d.body.split(" ").forEach(w => {
+                        if (w.startsWith("@")){
+                            w = w.toLowerCase().trim();
+                            mentioned.push(w);
+                        }
+                    })
+                    for (let i = 0; i < mentioned.length; i++){
+                        for (let j = i + 1; j < mentioned.length; j++){
+                            if (!nodes.find(n => n.id == mentioned[j])) nodes.push({id: mentioned[j], value: 0, type: "mentioned"});
+                            if (!nodes.find(n => n.id == mentioned[i])) nodes.push({id: mentioned[i], value: 0, type: "mentioned"});
+                            edges.push({source: mentioned[i], target: mentioned[j]});
+                        }
+                    }
+                })
+
+                console.log(nodes.length, edges.length)
+
+                // render the graph with a force-directed layout
+                let simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(edges).id(d => d.id))
+                    .force("charge", d3.forceManyBody().strength(0).distanceMin(2))
+                    .force("center", d3.forceCenter(2 * i * svgwidth/interval_count + svgwidth/10, svgheight/4));
+
+                let node = svg.selectAll(".node" + i)
+                    .data(nodes)
+                    .enter()
+                    .append("g")
+                    .attr("class", "node")
+                    .call(drag(simulation));
+
+                node.append("circle")
+                    .attr("r", d => Math.sqrt(d.value) / 2 + 2)
+                    .attr("stroke", "white")
+                    .attr("fill", d => Object.keys(important_people).includes(d.id) ? d3.interpolateSpectral(Object.keys(important_people).indexOf(d.id) / Object.keys(important_people).length) : "black");
+
+                // node.append("text")
+                    // .text(d => most_mentioned_users.find(n => n.id == d.id) != undefined ? d.id : "");
+
+                simulation.on("tick", () => {
+                    node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+                });
+
+                function drag(simulation) {
+
+                    function dragstarted(event) {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        event.subject.fx = event.subject.x;
+                        event.subject.fy = event.subject.y;
+                    }
+
+                    function dragged(event) {
+                        event.subject.fx = event.x;
+                        event.subject.fy = event.y;
+                    }
+
+                    function dragended(event) {
+                        if (!event.active) simulation.alphaTarget(0);
+                        event.subject.fx = null;
+                        event.subject.fy = null;
+                    }
+
+                    return d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended);
+                }
+
+
+            }
+        }
+
+        function slice_data(data, limit){
+            data = data.sort((a, b) => parseInt(a.unix_timestamp) - parseInt(b.unix_timestamp));
+            // get the first 1000 items
+            data = data.slice(0, limit);
+            // print it in csv form
+            console.log(d3.csvFormat(data));
+        }
+
+        async function init(){
+            // let lauradata = await d3.csv("data/bbclaurak-reduced-20000.csv");
+            // let lindata = await d3.csv("data/data-reduced-20000.csv");
+
+            let lauradata = await d3.csv("data/bbclaurak-isretweet-9a4d0867b0d8bb94bd738ddaef2f7c7b - main_sheet_leave_as_is_pls.csv");
+            let lindata = await d3.csv("data/data.csv");
+            // slice_data(lauradata, 20000);
+            // return;
+
+            console.log("done reading data")
+
+            lindata.map(d => d.reply_to = d.replied_user)
+            original_lauradata = lauradata;
+            original_lindata = lindata;
+
+            let row = d3.select("#container").append("div").attr("class", "row").style("text-align", "left");
+
+            let lauraminunixtime = Math.min.apply(0, lauradata.map(d => parseInt(d.unix_timestamp)));
+            let lauramaxunixtime = Math.max.apply(0, lauradata.map(d => parseInt(d.unix_timestamp)));
+            let linminunixtime = Math.min.apply(0, lindata.map(d => parseInt(d.unix_timestamp)));
+            let linmaxunixtime = Math.max.apply(0, lindata.map(d => parseInt(d.unix_timestamp)));
+
+            let one_interval_in_unix_time = 60 * 60 * 12;
+
+            // get all the most mentioned people
+            laura_important_people = {};
+            lin_important_people = {};
+            // lauradata.forEach(d => {
+            //     d.body.split(" ").forEach(w => {
+            //         if (w.startsWith("@")){
+            //             w = w.toLowerCase().trim();
+            //             if (laura_important_people[w] == undefined) laura_important_people[w] = 0;
+            //             laura_important_people[w] += 1;
+            //         }
+            //     })
+            // })
+            // lindata.forEach(d => {
+            //     d.body.split(" ").forEach(w => {
+            //         if (w.startsWith("@")){
+            //             w = w.toLowerCase().trim().replace(":", "");
+            //             if (lin_important_people[w] == undefined) lin_important_people[w] = 0;
+            //             lin_important_people[w] += 1;
+            //         }
+            //     })
+            // })
+            // add all the most replied to people
+            lauradata.forEach(d => {
+                if (d.reply_to == "" || d.reply_to == undefined) {
+                    return;
+                }
+                if (laura_important_people["@" + d.reply_to] == undefined) laura_important_people["@" + d.reply_to] = 0;
+                laura_important_people["@" + d.reply_to] += 1;
+            })
+            lindata.forEach(d => {
+                if (d.reply_to == "" || d.reply_to == undefined) {
+                    return;
+                }
+                if (lin_important_people["@" + d.reply_to] == undefined) lin_important_people["@" + d.reply_to] = 0;
+                lin_important_people["@" + d.reply_to] += 1;
+            })
+            // get the twenty most important people
+            laura_important_people = Object.keys(laura_important_people).map(k => [k, laura_important_people[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            laura_important_people = laura_important_people.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+            lin_important_people = Object.keys(lin_important_people).map(k => [k, lin_important_people[k]]).sort((a, b) => b[1] - a[1]).slice(0, 10)
+            lin_important_people = lin_important_people.reduce((obj, key) => {
+                obj[key[0]] = key[1];
+                return obj;
+            }, {});
+
+            // row.append("div").html("Laura:")
+            // make_horizontal_network(lauradata, row, one_interval_in_unix_time, laura_important_people);
+
+            // row.append("div").html("Lin:")
+            // make_horizontal_network(lindata, row, one_interval_in_unix_time, lin_important_people);
+
+            let lauracolumn = row.append("div").attr("class", "col");
+            let lincolumn = row.append("div").attr("class", "col");
+
+            lauracolumn.append("h1").html("BBC Laura Kuenssberg");
+            lauracolumn.append("h2").html("Overall time");
+            print_time(lauradata, lauracolumn);
+            lauracolumn.append("h3").html("Distribution of tweets over time")
+            distribution_of_tweets(lauradata, lauracolumn, one_interval_in_unix_time/10, laura_important_people);
+            // lauracolumn.append("h3").html("Who tweeted the most?")
+            // most_tweets(lauradata, lauracolumn);
+            // lauracolumn.append("h3").html("Who was mentioned the most?")
+            // most_mentioned_user(lauradata, lauracolumn, original_lauradata, laura_important_people);
+            // lauracolumn.append("h3").html("Who was replied to the most?")
+            // most_replied_to_user(lauradata, lauracolumn, original_lauradata, laura_important_people);
+
+            lincolumn.append("h1").html("Lin");
+            lincolumn.append("h2").html("Overall time");
+            print_time(lindata, lincolumn);
+            lincolumn.append("h3").html("Distribution of tweets over time")
+            distribution_of_tweets(lindata, lincolumn, one_interval_in_unix_time/10, lin_important_people);
+            // lincolumn.append("h3").html("Who tweeted the most?")
+            // most_tweets(lindata, lincolumn);
+            // lincolumn.append("h3").html("Who was mentioned the most?")
+            // most_mentioned_user(lindata, lincolumn, original_lindata, lin_important_people);
+            // lincolumn.append("h3").html("Who was replied to the most?")
+            // most_replied_to_user(lindata, lincolumn, original_lindata, lin_important_people);
+
+            d3.select("#container").append("hr");
+            d3.select("#container").append("h1").html("Time intervals")
+            d3.select("#container").append("hr");
+
+            // maximum number of tweets within a timespan of one_interval_in_unix_time in lauradata
+            let maxlauratweets = 0;
+            let interval_counts = new Array(Math.ceil((lauramaxunixtime - lauraminunixtime) / one_interval_in_unix_time)).fill(0);
+            for (let i = 0; i < lauradata.length; i++){
+                let d = lauradata[i];
+                let interval = Math.floor((parseInt(d.unix_timestamp) - lauraminunixtime) / one_interval_in_unix_time);
+                if (interval_counts[interval] == undefined) interval_counts[interval] = 0;
+                interval_counts[interval] += 1;
+                maxlauratweets = Math.max(maxlauratweets, interval_counts[interval]);
+            }
+            let laurascale = d3.scaleLinear().domain([0, maxlauratweets]).range([0, 15]);
+
+            let maxlintweets = 0;
+            interval_counts = new Array(Math.ceil((linmaxunixtime - linminunixtime) / one_interval_in_unix_time)).fill(0);
+            for (let i = 0; i < lindata.length; i++){
+                let d = lindata[i];
+                let interval = Math.floor((parseInt(d.unix_timestamp) - linminunixtime) / one_interval_in_unix_time);
+                if (interval_counts[interval] == undefined) interval_counts[interval] = 0;
+                interval_counts[interval] += 1;
+                maxlintweets = Math.max(maxlintweets, interval_counts[interval]);
+            }
+            let linscale = d3.scaleLinear().domain([0, maxlintweets]).range([0, 15]);
+            
+            for (let i = 0; i < 100; i++){
+                row = d3.select("#container").append("div").attr("class", "row").style("text-align", "left");
+
+                lauracolumn = row.append("div").attr("class", "col");
+                lincolumn = row.append("div").attr("class", "col");
+
+                let laurastart = lauraminunixtime + i * one_interval_in_unix_time;
+                let lauraend = lauraminunixtime + (i + 1) * one_interval_in_unix_time;
+                let linstart = linminunixtime + i * one_interval_in_unix_time;
+                let linend = linminunixtime + (i + 1) * one_interval_in_unix_time;
+
+                lauradata = original_lauradata.filter(d => parseInt(d.unix_timestamp) >= laurastart && parseInt(d.unix_timestamp) < lauraend);
+                lindata = original_lindata.filter(d => parseInt(d.unix_timestamp) >= linstart && parseInt(d.unix_timestamp) < linend);
+
+                let interval_length = 60*10;
+                let maxtweets_laura, maxtweets_lin = 0;
+                if (lauradata != undefined && lauradata.length > 0) {
+                    let lauramintime = lauradata.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+                    let lauramaxtime = lauradata.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+                    let interval_count_laura = Math.ceil((lauramaxtime - lauramintime) / interval_length);
+                    let interval_counts_laura = new Array(interval_count_laura).fill(0);
+                    lauradata.forEach(d => {
+                        let interval = Math.floor((parseInt(d.unix_timestamp) - lauramintime) / interval_length);
+                        interval_counts_laura[interval] += 1;
+                    })
+                    // console.log(interval_counts_laura)
+                    maxtweets_laura = Math.max.apply(0, interval_counts_laura);
+
+                    // if it is nan, set it to 0
+                    if (isNaN(maxtweets_laura)) maxtweets_laura = 0;
+                }
+
+                if (lindata != undefined && lindata.length > 0) {
+                    let linmintime = lindata.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.min(a, b));
+                    let linmaxtime = lindata.map(d => parseInt(d.unix_timestamp)).reduce((a, b) => Math.max(a, b));
+
+                    let interval_count_lin = Math.ceil((linmaxtime - linmintime) / interval_length);
+                    let interval_counts_lin = new Array(interval_count_lin).fill(0);
+                    lindata.forEach(d => {
+                        let interval = Math.floor((parseInt(d.unix_timestamp) - linmintime) / interval_length);
+                        interval_counts_lin[interval] += 1;
+                    })
+                    maxtweets_lin = Math.max.apply(0, interval_counts_lin);
+
+                    // if it is nan, set it to 0
+                    if (isNaN(maxtweets_lin)) maxtweets_lin = 0;
+                }
+
+                let maxtweets = Math.max(maxtweets_laura, maxtweets_lin);
+                
+                console.log(maxtweets, maxtweets_laura, maxtweets_lin)
+                
+                let y_scale = d3.scaleLinear().domain([0, maxtweets]).range([svgheight - 100, 0]);
+                // let y_scale;
+
+                if (lauradata.length > 0){
+                    // lauracolumn.append("hr")
+                    let d = lauracolumn.append("div").style("display", "flex")
+                    // d.append("svg").attr("width", 30).attr("height", 30)
+                    //     .append("circle")
+                    //     .attr("cx", 15)
+                    //     .attr("cy", 15)
+                    //     .attr("r", laurascale(lauradata.length))
+                    //     .attr("fill", d3.interpolateReds(laurascale(lauradata.length) / 15))
+                    // // d.append("h2").html("&nbsp; Timeframe " + i);
+                    // // append a button that opens a panel below
+                    // d.append("button")
+                    //     .attr("class", "btn")
+                    //     .style("--bs-btn-padding-x", "0.5rem")
+                    //     .style("--bs-btn-padding-y", "0.25rem")
+                    //     .style("font-size", "0.75rem")
+                    //     .style("line-height", ".75")
+                    //     .attr("data-bs-toggle", "collapse")
+                    //     .attr("data-bs-target", ".collapse_timeframe" + i)
+                    //     .attr("aria-expanded", "false")
+                    //     .attr("aria-controls", "collapse_timeframe" + i)
+                    //     .html("[Show details]");
+
+                    // print_time(lauradata, lauracolumn);
+
+                    let dd = lauracolumn.append("div")
+                    dd.attr("class", "collapse show collapse_timeframe" + i)
+                        .style("padding-left", "20px")
+                        .style("padding-top", "20px")
+                        .style("padding-bottom", "20px")
+                        .style("padding-right", "20px")
+
+                    // dd.append("h3").html("Distribution of tweets over time in this interval")
+                    distribution_of_tweets(lauradata, dd, 60 * 10, laura_important_people, y_scale);
+                    // if (display_networks){
+                    //     dd.append("h3").html("Network of mentions")
+                    //     network_of_mentions(lauradata, dd);
+                    //     dd.append("h3").html("Network of replies")
+                    //     network_of_replies(lauradata, dd);
+                    // }
+                    // dd.append("h3").html("Who tweeted the most?")
+                    // most_tweets(lauradata, dd);
+                    // dd.append("h3").html("Who was mentioned the most?")
+                    // most_mentioned_user(lauradata, dd, original_lauradata, laura_important_people);
+                    // dd.append("h3").html("Who was replied to the most?")
+                    // most_replied_to_user(lauradata, dd, original_lauradata, laura_important_people);
+                }
+
+                if (lindata.length > 0){
+                    // lincolumn.append("hr")
+                    let d = lincolumn.append("div").style("display", "flex")
+                    // d.append("svg").attr("width", 30).attr("height", 30)
+                    //     .append("circle")
+                    //     .attr("cx", 15)
+                    //     .attr("cy", 15)
+                    //     .attr("r", linscale(lindata.length))
+                    //     .attr("fill", d3.interpolateReds(linscale(lindata.length) / 15))
+                    // d.append("h2").html("&nbsp; Timeframe " + i);
+                    // append a button that opens a panel below
+                    // d.append("button")
+                    //     .attr("class", "btn")
+                    //     .style("--bs-btn-padding-x", "0.5rem")
+                    //     .style("--bs-btn-padding-y", "0.25rem")
+                    //     .style("font-size", "0.75rem")
+                    //     .style("line-height", ".75")
+                    //     .attr("data-bs-toggle", "collapse")
+                    //     .attr("data-bs-target", ".collapse_timeframe" + i)
+                    //     .attr("aria-expanded", "false")
+                    //     .attr("aria-controls", "collapse_timeframe" + i)
+                    //     .html("[Show details]");
+                    // print_time(lindata, lincolumn);
+
+                    let dd = lincolumn.append("div")
+                    dd.attr("class", "collapse show collapse_timeframe" + i)
+                        .style("padding-left", "20px")
+                        .style("padding-top", "20px")
+                        .style("padding-bottom", "20px")
+                        .style("padding-right", "20px")
+
+                    // dd.append("h3").html("Distribution of tweets over time in this interval")
+                    distribution_of_tweets(lindata, dd, 60 * 10, lin_important_people, y_scale);
+                    // if (display_networks){
+                    //     dd.append("h3").html("Network of mentions")
+                    //     network_of_mentions(lindata, dd);
+                    //     dd.append("h3").html("Network of replies")
+                    //     network_of_replies(lindata, dd);
+                    // }
+                    // dd.append("h3").html("Who tweeted the most?")
+                    // most_tweets(lindata, dd);
+                    // dd.append("h3").html("Who was mentioned the most?")
+                    // most_mentioned_user(lindata, dd, original_lindata, lin_important_people);
+                    // dd.append("h3").html("Who was replied to the most?")
+                    // most_replied_to_user(lindata, dd, original_lindata, lin_important_people);
+                    
+                }
+            }
+            
+        }
+
+        async function explore(){
+            // let lauradata = await d3.csv("data/bbclaurak-isretweet-9a4d0867b0d8bb94bd738ddaef2f7c7b - main_sheet_leave_as_is_pls.csv");
+            let lindata = await d3.csv("data/data.csv");
+
+            // console.log(lindata);
+
+            // build a json with one tweet every ten from lindata
+            // let json = [];
+            // for (let i = 0; i < lauradata.length; i += 1){
+            //     let d = lauradata[i];
+            //     json.push(d)
+            // }
+            console.log(new Set(lindata.map(d => d.images)))
+            // console.log(lindata)
+
+            // // print timestamp of earliest entry in the data
+            // let mintime = Math.min.apply(0, lauradata.map(d => parseInt(d.unix_timestamp)));
+            // console.log("earliest", new Date(mintime * 1000))
+
+            // let maxtime = Math.max.apply(0, lauradata.map(d => parseInt(d.unix_timestamp)));
+            // console.log("latest", new Date(maxtime * 1000))
+
+            // // get all the tweets that have "laura" in the name of the author
+            // let laura_tweets = lauradata.filter(d => d.author.toLowerCase().includes("laura"));
+            // console.log("laura", [...new Set(laura_tweets.map(l => l.author))])
+
+            // get all the tweets 
+        }
+
+        init();
+        // explore();
+    </script>
+</html>
